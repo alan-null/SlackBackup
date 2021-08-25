@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using Newtonsoft.Json;
 using RestSharp;
 using SlackAPI;
@@ -14,7 +15,7 @@ namespace SlackBackup
     public class SlackBackup
     {
         protected ConcurrentStack<string> RunningTasks = new ConcurrentStack<string>();
-        protected SlackClient Client { get; set; }
+        protected SlackTaskClient Client { get; set; }
         protected RestClient RestClient { get; }
         protected ConcurrentBag<SerializableBackup> Bag { get; set; } = new ConcurrentBag<SerializableBackup>();
         protected string Token { get; }
@@ -23,7 +24,7 @@ namespace SlackBackup
 
         public SlackBackup(string token, string folderPath)
         {
-            Client = new SlackClient(token);
+            Client = new SlackTaskClient(token);
             RestClient = new RestClient("https://files.slack.com/");
             Token = token;
             FolderPath = folderPath;
@@ -33,14 +34,14 @@ namespace SlackBackup
             }
         }
 
-        public void Getfiles()
+        public async Task GetfilesAsync()
         {
             StartJob("GetFiles");
-            DoGetfiles();
+            await DoGetfilesAsync();
             WaitForJob();
         }
 
-        public void UpdateFiles()
+        public async Task UpdateFilesAsync()
         {
             var latestFileDate = DateTime.MinValue;
             Directory.GetFiles(FolderPath, "*.json").Where(s => !s.Contains(Token)).ToList().ForEach(s =>
@@ -52,22 +53,20 @@ namespace SlackBackup
                 }
             });
             latestFileDate = latestFileDate.AddSeconds(1);
-            FetchFiles(pageNo: 1, fromDate: latestFileDate);
+            await FetchFilesAsync(pageNo: 0, fromDate: latestFileDate);
             WaitForJob();
         }
 
-        private void DoGetfiles()
+        private async Task DoGetfilesAsync()
         {
-            Client.GetFiles(response =>
+            var response = await Client.GetFilesAsync(count: 100);
+            response.files.ToList().ForEach(SaveFile);
+            int curr = response.paging.page;
+            while (response.paging.pages >= curr)
             {
-                response.files.ToList().ForEach(SaveFile);
-                int curr = response.paging.page;
-                while (response.paging.pages >= curr)
-                {
-                    FetchFiles(curr++);
-                }
-                PushFinishNotification();
-            }, count: 100);
+                await FetchFilesAsync(curr++);
+            }
+            PushFinishNotification();
         }
 
         protected virtual void SaveFile(SlackAPI.File responseFile)
@@ -80,15 +79,13 @@ namespace SlackBackup
             File.WriteAllText(fileMetaPath, JsonConvert.SerializeObject(responseFile, Formatting.Indented));
         }
 
-        protected void FetchFiles(int pageNo, DateTime? fromDate = null)
+        protected async Task FetchFilesAsync(int pageNo, DateTime? fromDate = null)
         {
             StartJob("FetchFiles");
-            Client.GetFiles(response =>
-            {
-                response.files.ToList().ForEach(SaveFile);
-                PushFinishNotification();
-                Console.WriteLine("FetchFiles-END");
-            }, count: 100, page: pageNo, from: fromDate);
+            var response = await Client.GetFilesAsync(count: 100, page: pageNo, from: fromDate);
+            response.files.ToList().ForEach(SaveFile);
+            PushFinishNotification();
+            Console.WriteLine("FetchFiles-END");
         }
 
         protected virtual byte[] DownloadFile(SlackAPI.File responseFile)
@@ -99,22 +96,17 @@ namespace SlackBackup
             return executeAsGet.RawBytes;
         }
 
-        public void TestAuth(Action<AuthTestResponse> callback)
+        public async Task InitializeBackupAsync()
         {
-            Client.APIRequestWithToken(callback, new Tuple<string, string>("exclude_archived", "0"));
-        }
-
-        public void InitializeBackup()
-        {
-            DoInitializeBackup();
+            await DoInitializeBackupAsync();
             WaitForJob();
             var serializeObject = JsonConvert.SerializeObject(Bag, Formatting.Indented);
             File.WriteAllText(FilePath, serializeObject);
         }
 
-        public void UpdateBackup()
+        public async Task UpdateBackupAsync()
         {
-            DoUpdateBackup();
+            await DoUpdateBackupAsync();
             WaitForJob();
             foreach (var serializableBackup in Bag)
             {
@@ -124,22 +116,19 @@ namespace SlackBackup
             File.WriteAllText(FilePath, serializeObject);
         }
 
-        protected void DoInitializeBackup()
+        protected async Task DoInitializeBackupAsync()
         {
             StartJob("DoInitializeBackup");
-            Client.GetChannelList(r =>
+            var r = await Client.GetConversationsListAsync();
+            foreach (var channel in r.channels)
             {
-                foreach (var channel in r.channels)
+                if (!Bag.Any(backup => backup.Channel.id.Equals(channel.id)))
                 {
-
-                    if (!Bag.Any(backup => backup.Channel.id.Equals(channel.id)))
-                    {
-                        Bag.Add(new SerializableBackup(channel));
-                    }
-                    FetchMessages(channel);
+                    Bag.Add(new SerializableBackup(channel));
                 }
-                PushFinishNotification();
-            }, false);
+                await FetchMessagesAsync(channel);
+            }
+            PushFinishNotification();
 
         }
 
@@ -148,7 +137,7 @@ namespace SlackBackup
             return Bag.First(b => b.Channel.id.Equals(channel.id));
         }
 
-        protected void DoUpdateBackup()
+        protected async Task DoUpdateBackupAsync()
         {
             StartJob("DoUpdateBackup");
             var lines = File.ReadAllText(FilePath);
@@ -158,25 +147,22 @@ namespace SlackBackup
             deSerializeObject.Reverse();
             deSerializeObject.ForEach(backup => Bag.Add(backup));
 
-            Client.GetChannelList(r =>
+            var r = await Client.GetConversationsListAsync();
+            foreach (var channel in r.channels)
             {
-                foreach (var channel in r.channels)
+                if (!Bag.Any(backup => backup.Channel.id.Equals(channel.id)))
                 {
-                    if (!Bag.Any(backup => backup.Channel.id.Equals(channel.id)))
-                    {
-                        Bag.Add(new SerializableBackup(channel));
-                        FetchMessages(channel);
-                    }
-                    else
-                    {
-                        var backup = GetSerializableBackup(channel);
-                        var latestMessage = backup.GetLatestMessage();
-                        FetchMessages(channel, null, latestMessage?.ts);
-                    }
+                    Bag.Add(new SerializableBackup(channel));
+                    await FetchMessagesAsync(channel);
+                }
+                else
+                {
+                    var backup = GetSerializableBackup(channel);
+                    var latestMessage = backup.GetLatestMessage();
+                    await FetchMessagesAsync(channel, null, latestMessage?.ts);
                 }
                 PushFinishNotification();
-            }, false);
-
+            }
         }
 
         protected virtual void PushFinishNotification()
@@ -184,28 +170,28 @@ namespace SlackBackup
             RunningTasks.TryPop(out _);
         }
 
-        protected void FetchMessages(SlackAPI.Channel channel, DateTime? historyLatest = null, DateTime? oldest = null)
+        protected async Task FetchMessagesAsync(SlackAPI.Channel channel, DateTime? historyLatest = null, DateTime? oldest = null)
         {
             StartJob($"Channel '{channel.name}' sync");
             Console.WriteLine($"GetChannelHistory: {channel.name}");
-            Client.GetChannelHistory(history =>
+            var history = await Client.GetChannelHistoryAsync(channel, latest: historyLatest, oldest: oldest, count: 1000);
+
+            var backup = GetSerializableBackup(channel);
+            if (history.messages.Length > 0)
             {
-                var backup = GetSerializableBackup(channel);
-                if (history.messages.Length > 0)
+                Console.WriteLine("Adding new messsages");
+                foreach (var m in history.messages)
                 {
-                    Console.WriteLine("Adding new messsages");
-                    foreach (var m in history.messages)
-                    {
-                        Console.WriteLine($"{m.text} [{m.ts}]");
-                    }
-                    backup.Messages.AddRange(history.messages);
+                    Console.WriteLine($"{m.text} [{m.ts}]");
                 }
-                if (history.has_more)
-                {
-                    FetchMessages(channel, history.messages.Last().ts);
-                }
-                PushFinishNotification();
-            }, channel, count: 1000, latest: historyLatest, oldest: oldest);
+                backup.Messages.AddRange(history.messages);
+            }
+            if (history.has_more)
+            {
+                await FetchMessagesAsync(channel, history.messages.Last().ts);
+            }
+            PushFinishNotification();
+
         }
 
         protected void StartJob(string name)

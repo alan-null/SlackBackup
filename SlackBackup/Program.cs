@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Threading.Tasks;
 using Newtonsoft.Json;
 using File = System.IO.File;
 
@@ -8,7 +9,7 @@ namespace SlackBackup
 
     class Program
     {
-        static void Main(string[] args)
+        static async Task Main(string[] args)
         {
             var filePath = args[0];
             if (File.Exists(filePath))
@@ -22,13 +23,13 @@ namespace SlackBackup
 
                 if (Directory.GetFiles(configuration.Folder).Length == 0)
                 {
-                    backup.InitializeBackup();
-                    backup.Getfiles();
+                    await backup.InitializeBackupAsync();
+                    await backup.GetfilesAsync();
                 }
                 else
                 {
-                    backup.UpdateBackup();
-                    backup.UpdateFiles();
+                    await backup.UpdateBackupAsync();
+                    await backup.UpdateFilesAsync();
                 }
                 Console.WriteLine("Job done");
             }
