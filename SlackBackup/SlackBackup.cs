@@ -188,7 +188,7 @@ namespace SlackBackup
             }
             if (history.has_more)
             {
-                await FetchMessagesAsync(channel, history.messages.Last().ts);
+                await FetchMessagesAsync(channel, history.messages.Last().ts, oldest);
             }
             PushFinishNotification();
 
