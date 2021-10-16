@@ -177,18 +177,22 @@ namespace SlackBackup
             var history = await Client.GetChannelHistoryAsync(channel, latest: historyLatest, oldest: oldest, count: 1000);
 
             var backup = GetSerializableBackup(channel);
+            Console.WriteLine(history.error);
             if (history.messages.Length > 0)
             {
-                Console.WriteLine("Adding new messsages");
-                foreach (var m in history.messages)
-                {
-                    Console.WriteLine($"{m.text} [{m.ts}]");
-                }
+                Console.WriteLine($"Adding new messsages [{history.messages[history.messages.Length - 1].ts.Date} - {history.messages[0].ts.Date}]");
                 backup.Messages.AddRange(history.messages);
             }
             if (history.has_more)
             {
-                await FetchMessagesAsync(channel, history.messages.Last().ts, oldest);
+                if (history.messages.Last().ts > oldest)
+                {
+                    await FetchMessagesAsync(channel, null, history.messages.First().ts);
+                }
+                else
+                {
+                    await FetchMessagesAsync(channel, history.messages.Last().ts, oldest);
+                }
             }
             PushFinishNotification();
 
