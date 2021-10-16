@@ -209,7 +209,7 @@ namespace SlackAPI
             if(oldest.HasValue)
                 parameters.Add(new Tuple<string, string>("oldest", oldest.Value.ToProperTimeStamp()));
             if (count.HasValue)
-                parameters.Add(new Tuple<string, string>("count", count.Value.ToString()));
+                parameters.Add(new Tuple<string, string>("limit", count.Value.ToString()));
             if (unreads.HasValue)
                 parameters.Add(new Tuple<string, string>("unreads", unreads.Value ? "1" : "0"));
 
