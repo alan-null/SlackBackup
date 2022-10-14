@@ -92,7 +92,7 @@ namespace SlackBackup
         {
             var request = new RestRequest(responseFile.url_private);
             request.AddHeader("Authorization", $"Bearer {Token}");
-            var executeAsGet = RestClient.ExecuteAsGet(request, "GET");
+            var executeAsGet = RestClient.ExecuteGet(request);
             return executeAsGet.RawBytes;
         }
 
